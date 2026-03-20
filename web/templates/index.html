@@ -241,6 +241,38 @@
         .ping-mid  { color: var(--yellow); }
         .ping-bad  { color: var(--red); }
 
+        /* ── Error banner ── */
+        #node-error-banner {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 32px;
+            background: rgba(224, 82, 82, 0.08);
+            border-bottom: 1px solid rgba(224, 82, 82, 0.25);
+            animation: fadein 0.3s ease;
+        }
+
+        .error-icon {
+            font-size: 15px;
+            color: var(--red);
+            flex-shrink: 0;
+        }
+
+        .error-msg {
+            color: var(--red);
+            font-size: 12px;
+            flex: 1;
+        }
+
+        .error-time {
+            font-size: 11px;
+            color: var(--muted);
+        }
+
+        .peer-count-offline {
+            color: var(--red) !important;
+        }
+
         /* ── Footer ── */
         footer {
             margin-top: auto;
@@ -381,10 +413,30 @@
     }
 
     // Re-attach listeners and re-apply sort after every HTMX swap
+    // ── Node status indicator ─────────────────────────────────────────────────
+    function updateStatusDot() {
+        const dot = document.querySelector('.pulse-dot');
+        const label = document.querySelector('.status-label');
+        const offline = document.getElementById('node-error-banner');
+        if (!dot || !label) return;
+        if (offline) {
+            dot.style.background = 'var(--red)';
+            dot.style.animationDuration = '0.6s';
+            label.style.color = 'var(--red)';
+            label.textContent = 'Offline';
+        } else {
+            dot.style.background = 'var(--green)';
+            dot.style.animationDuration = '2s';
+            label.style.color = 'var(--green)';
+            label.textContent = 'Live';
+        }
+    }
+
     document.addEventListener('htmx:afterSwap', () => {
         attachSortListeners();
         updateSortHeaders();
         applySort();
+        updateStatusDot();
     });
 
     // Initial attach

@@ -29,12 +29,27 @@ _geo_cache = {}
 
 
 def get_peer_info():
-    result = subprocess.run(
-        ["bitcoin-cli", "getpeerinfo"],
-        capture_output=True,
-        text=True
-    )
-    return json.loads(result.stdout)
+    """Fetch peer info. Returns (peers, error_message)."""
+    try:
+        result = subprocess.run(
+            ["bitcoin-cli", "getpeerinfo"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode != 0:
+            stderr = result.stderr.strip()
+            msg = stderr if stderr else "bitcoin-cli returned a non-zero exit code"
+            return [], msg
+        if not result.stdout.strip():
+            return [], "No response from bitcoind — node may be starting up"
+        return json.loads(result.stdout), None
+    except subprocess.TimeoutExpired:
+        return [], "bitcoin-cli timed out — node may be busy or restarting"
+    except json.JSONDecodeError:
+        return [], "Could not parse response from bitcoind"
+    except Exception as e:
+        return [], f"Unexpected error: {e}"
 
 
 def lookup_geo(ip):
@@ -183,12 +198,25 @@ def build_rows(peers):
 
 @app.get("/peers", response_class=HTMLResponse)
 async def peers_fragment():
-    peers = get_peer_info()
-    rows = build_rows(peers)
+    peers, error = get_peer_info()
     now = datetime.now().strftime("%H:%M:%S")
+
+    error_banner = ""
+    if error:
+        error_banner = f"""
+        <div id="node-error-banner">
+            <span class="error-icon">⚠</span>
+            <span class="error-msg">Node unreachable — {error}</span>
+            <span class="error-time">Last attempt: {now}</span>
+        </div>"""
+
+    rows = build_rows(peers)
+    peer_count = f"{len(peers)} peers connected" if not error else "Node offline"
+
     return f"""
+    {error_banner}
     <div id="meta-bar">
-        <span class="peer-count">{len(peers)} peers connected</span>
+        <span class="peer-count {'peer-count-offline' if error else ''}">{peer_count}</span>
         <span class="last-update">Last update: {now}</span>
     </div>
     <div class="table-wrap">
