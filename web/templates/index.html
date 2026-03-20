@@ -15,7 +15,7 @@
             --border-hi: #2a3545;
             --text:      #c8d4e0;
             --muted:     #4a5a6e;
-            --accent:    #f7931a;   /* Bitcoin orange */
+            --accent:    #f7931a;
             --accent-dim:#7a4a0d;
             --green:     #3ddc84;
             --yellow:    #f5c542;
@@ -35,7 +35,6 @@
             font-size: 13px;
         }
 
-        /* ── Background grain texture ── */
         body::before {
             content: '';
             position: fixed;
@@ -112,8 +111,8 @@
             text-transform: uppercase;
         }
 
-        /* ── Meta bar (peer count + last update) ── */
-        #meta-bar, #peers-wrap > div:first-child {
+        /* ── Meta bar ── */
+        #meta-bar {
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -133,7 +132,7 @@
             color: var(--muted);
         }
 
-        /* ── Table wrapper ── */
+        /* ── Table ── */
         .table-wrap {
             overflow-x: auto;
             padding: 0 0 32px;
@@ -160,7 +159,31 @@
             position: sticky;
             top: 0;
             background: var(--bg);
+            user-select: none;
         }
+
+        th[data-col] {
+            cursor: pointer;
+            transition: color 0.15s;
+        }
+
+        th[data-col]:hover {
+            color: var(--text);
+        }
+
+        th[data-col].sort-asc,
+        th[data-col].sort-desc {
+            color: var(--accent);
+        }
+
+        th[data-col]::after {
+            content: ' ⇅';
+            opacity: 0.3;
+            font-size: 9px;
+        }
+
+        th[data-col].sort-asc::after  { content: ' ↑'; opacity: 1; color: var(--accent); }
+        th[data-col].sort-desc::after { content: ' ↓'; opacity: 1; color: var(--accent); }
 
         td {
             padding: 9px 16px;
@@ -175,34 +198,29 @@
             background: rgba(255,255,255,.025);
         }
 
-        tbody tr:last-child td {
-            border-bottom: none;
-        }
+        tbody tr:last-child td { border-bottom: none; }
 
-        /* ── Specific column styles ── */
+        /* ── Column styles ── */
         .td-id     { color: var(--muted); font-size: 11px; width: 40px; text-align: right; }
         .td-dur    { text-align: right; font-variant-numeric: tabular-nums; }
-        .td-svc    { }
         .td-ver    { color: #8fa4bb; }
         .td-proto  { text-align: center; color: var(--muted); font-size: 11px; }
         .td-num    { text-align: right; font-variant-numeric: tabular-nums; }
         .td-ping   { text-align: right; font-variant-numeric: tabular-nums; }
         .td-bool   { text-align: center; color: var(--green); font-size: 13px; }
+        .td-geo    { max-width: 200px; }
 
-        /* ── Warning row (missing NODE_NETWORK) ── */
-        .row-warn td {
-            background: rgba(240, 180, 50, 0.04);
-        }
-        .row-warn:hover td {
-            background: rgba(240, 180, 50, 0.07) !important;
-        }
-        .row-warn .td-id::before {
-            content: '⚠ ';
-            color: var(--yellow);
-            font-size: 10px;
-        }
+        /* ── Geo cell ── */
+        .geo-flag    { font-size: 15px; vertical-align: middle; }
+        .geo-city    { color: var(--text); }
+        .geo-country { color: var(--muted); font-size: 11px; margin-left: 4px; }
 
-        /* ── Service badges ── */
+        /* ── Warning rows ── */
+        .row-warn td { background: rgba(240,180,50,.04); }
+        .row-warn:hover td { background: rgba(240,180,50,.07) !important; }
+        .row-warn .td-id::before { content: '⚠ '; color: var(--yellow); font-size: 10px; }
+
+        /* ── Badges ── */
         .badge {
             display: inline-block;
             padding: 2px 6px;
@@ -235,19 +253,13 @@
             letter-spacing: 0.06em;
         }
 
-        /* ── HTMX loading indicator ── */
-        .htmx-indicator {
-            opacity: 0;
-            transition: opacity 0.2s;
-        }
+        /* ── Loading indicator ── */
+        .htmx-indicator { opacity: 0; transition: opacity 0.2s; }
         .htmx-request .htmx-indicator,
-        .htmx-request.htmx-indicator {
-            opacity: 1;
-        }
+        .htmx-request.htmx-indicator { opacity: 1; }
         .spinner {
             display: inline-block;
-            width: 10px;
-            height: 10px;
+            width: 10px; height: 10px;
             border: 2px solid var(--border-hi);
             border-top-color: var(--accent);
             border-radius: 50%;
@@ -256,10 +268,7 @@
         }
         @keyframes spin { to { transform: rotate(360deg); } }
 
-        /* ── Fade-in on load ── */
-        #peers-wrap {
-            animation: fadein 0.4s ease;
-        }
+        #peers-wrap { animation: fadein 0.4s ease; }
         @keyframes fadein { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
     </style>
 </head>
@@ -267,7 +276,6 @@
 <div class="shell">
 
     <header>
-        <!-- Bitcoin "₿" SVG logo -->
         <svg class="btc-logo" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
             <circle cx="50" cy="50" r="50" fill="#f7931a"/>
             <text x="50" y="68" text-anchor="middle" font-size="58" font-family="Arial Black, sans-serif" font-weight="900" fill="white">₿</text>
@@ -297,16 +305,105 @@
             <table><thead><tr>
                 <th>ID</th><th>Connected</th><th>Services</th><th>Client</th>
                 <th>Proto</th><th>Sent</th><th>Received</th><th>Ping</th>
-                <th>Inbound</th><th>Relay</th>
+                <th>Inbound</th><th>Relay</th><th>Location</th>
             </tr></thead><tbody></tbody></table>
         </div>
     </div>
 
     <footer>
-        <span>Refreshes every 15 seconds</span>
-        <span>⚠ Yellow rows = missing NODE_NETWORK &nbsp;·&nbsp; Ping: <span style="color:var(--green)">green</span> &lt;100ms · <span style="color:var(--yellow)">yellow</span> &lt;300ms · <span style="color:var(--red)">red</span> ≥300ms</span>
+        <span>Refreshes every 15 seconds &nbsp;·&nbsp; Click column headers to sort</span>
+        <span>⚠ Yellow = missing NODE_NETWORK &nbsp;·&nbsp; Ping: <span style="color:var(--green)">green</span> &lt;100ms · <span style="color:var(--yellow)">yellow</span> &lt;300ms · <span style="color:var(--red)">red</span> ≥300ms</span>
     </footer>
 
 </div>
+
+<script>
+    // ── Sorting ──────────────────────────────────────────────────────────────
+    let sortCol = null;
+    let sortDir = 1; // 1 = asc, -1 = desc
+
+    function getSortValue(row, col) {
+        switch (col) {
+            case 'id':       return parseInt(row.dataset.id) || 0;
+            case 'duration': return parseInt(row.dataset.duration) || 0;
+            case 'ping':     return parseInt(row.dataset.ping) || 999999;
+            case 'sent':     return parseInt(row.dataset.sent) || 0;
+            case 'recv':     return parseInt(row.dataset.recv) || 0;
+            case 'proto':    return parseInt(row.dataset.proto) || 0;
+            case 'inbound':  return row.dataset.inbound === '1' ? 0 : 1;
+            case 'relay':    return row.dataset.relay === '1' ? 0 : 1;
+            case 'geo':      return (row.dataset.geo || '').toLowerCase();
+            default:         return 0;
+        }
+    }
+
+    function applySort() {
+        if (!sortCol) return;
+        const table = document.getElementById('peer-table');
+        if (!table) return;
+        const tbody = table.querySelector('tbody');
+        const rows = Array.from(tbody.querySelectorAll('tr'));
+
+        rows.sort((a, b) => {
+            const av = getSortValue(a, sortCol);
+            const bv = getSortValue(b, sortCol);
+            if (av < bv) return -1 * sortDir;
+            if (av > bv) return  1 * sortDir;
+            return 0;
+        });
+
+        rows.forEach(r => tbody.appendChild(r));
+    }
+
+    function updateSortHeaders() {
+        document.querySelectorAll('th[data-col]').forEach(th => {
+            th.classList.remove('sort-asc', 'sort-desc');
+            if (th.dataset.col === sortCol) {
+                th.classList.add(sortDir === 1 ? 'sort-asc' : 'sort-desc');
+            }
+        });
+    }
+
+    // Attach sort listeners — works on initial load and after HTMX swaps
+    function attachSortListeners() {
+        document.querySelectorAll('th[data-col]').forEach(th => {
+            th.addEventListener('click', () => {
+                if (sortCol === th.dataset.col) {
+                    sortDir *= -1;
+                } else {
+                    sortCol = th.dataset.col;
+                    sortDir = 1;
+                }
+                updateSortHeaders();
+                applySort();
+            });
+        });
+    }
+
+    // Re-attach listeners and re-apply sort after every HTMX swap
+    document.addEventListener('htmx:afterSwap', () => {
+        attachSortListeners();
+        updateSortHeaders();
+        applySort();
+    });
+
+    // Initial attach
+    attachSortListeners();
+
+    // ── Pause refresh when tab is hidden ─────────────────────────────────────
+    document.addEventListener('visibilitychange', () => {
+        const wrap = document.getElementById('peers-wrap');
+        if (!wrap) return;
+        if (document.hidden) {
+            wrap.removeAttribute('hx-trigger');
+            htmx.process(wrap);
+        } else {
+            wrap.setAttribute('hx-trigger', 'every 15s');
+            htmx.process(wrap);
+            // Immediately refresh when tab becomes visible again
+            htmx.trigger(wrap, 'every 15s');
+        }
+    });
+</script>
 </body>
 </html>
