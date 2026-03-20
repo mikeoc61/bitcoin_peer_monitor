@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bitcoin Peer Monitor</title>
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600&family=Syne:wght@700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg:        #0a0c0f;
+            --surface:   #10141a;
+            --border:    #1e2530;
+            --border-hi: #2a3545;
+            --text:      #c8d4e0;
+            --muted:     #4a5a6e;
+            --accent:    #f7931a;   /* Bitcoin orange */
+            --accent-dim:#7a4a0d;
+            --green:     #3ddc84;
+            --yellow:    #f5c542;
+            --red:       #e05252;
+            --blue:      #5b9cf6;
+            --mono:      'JetBrains Mono', monospace;
+            --display:   'Syne', sans-serif;
+        }
+
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        html, body {
+            height: 100%;
+            background: var(--bg);
+            color: var(--text);
+            font-family: var(--mono);
+            font-size: 13px;
+        }
+
+        /* ── Background grain texture ── */
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='300' height='300' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .shell {
+            position: relative;
+            z-index: 1;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* ── Header ── */
+        header {
+            display: flex;
+            align-items: center;
+            gap: 18px;
+            padding: 24px 32px 20px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .btc-logo {
+            width: 36px;
+            height: 36px;
+            flex-shrink: 0;
+        }
+
+        .header-text h1 {
+            font-family: var(--display);
+            font-size: 22px;
+            font-weight: 800;
+            letter-spacing: -0.02em;
+            color: #fff;
+            line-height: 1;
+        }
+
+        .header-text .subtitle {
+            font-size: 11px;
+            color: var(--muted);
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            margin-top: 4px;
+        }
+
+        .header-right {
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .pulse-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--green);
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(61,220,132,.4); }
+            50%       { opacity: .7; box-shadow: 0 0 0 5px rgba(61,220,132,0); }
+        }
+
+        .status-label {
+            font-size: 11px;
+            color: var(--green);
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        /* ── Meta bar (peer count + last update) ── */
+        #meta-bar, #peers-wrap > div:first-child {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 14px 32px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .peer-count {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--accent);
+            letter-spacing: 0.06em;
+        }
+
+        .last-update {
+            font-size: 11px;
+            color: var(--muted);
+        }
+
+        /* ── Table wrapper ── */
+        .table-wrap {
+            overflow-x: auto;
+            padding: 0 0 32px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        thead tr {
+            border-bottom: 1px solid var(--border-hi);
+        }
+
+        th {
+            padding: 10px 16px;
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: var(--muted);
+            text-align: left;
+            white-space: nowrap;
+            position: sticky;
+            top: 0;
+            background: var(--bg);
+        }
+
+        td {
+            padding: 9px 16px;
+            border-bottom: 1px solid var(--border);
+            white-space: nowrap;
+            vertical-align: middle;
+            color: var(--text);
+            font-size: 12.5px;
+        }
+
+        tbody tr:hover td {
+            background: rgba(255,255,255,.025);
+        }
+
+        tbody tr:last-child td {
+            border-bottom: none;
+        }
+
+        /* ── Specific column styles ── */
+        .td-id     { color: var(--muted); font-size: 11px; width: 40px; text-align: right; }
+        .td-dur    { text-align: right; font-variant-numeric: tabular-nums; }
+        .td-svc    { }
+        .td-ver    { color: #8fa4bb; }
+        .td-proto  { text-align: center; color: var(--muted); font-size: 11px; }
+        .td-num    { text-align: right; font-variant-numeric: tabular-nums; }
+        .td-ping   { text-align: right; font-variant-numeric: tabular-nums; }
+        .td-bool   { text-align: center; color: var(--green); font-size: 13px; }
+
+        /* ── Warning row (missing NODE_NETWORK) ── */
+        .row-warn td {
+            background: rgba(240, 180, 50, 0.04);
+        }
+        .row-warn:hover td {
+            background: rgba(240, 180, 50, 0.07) !important;
+        }
+        .row-warn .td-id::before {
+            content: '⚠ ';
+            color: var(--yellow);
+            font-size: 10px;
+        }
+
+        /* ── Service badges ── */
+        .badge {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.06em;
+            margin-right: 3px;
+        }
+        .badge-n    { background: rgba(247,147,26,.15);  color: var(--accent); border: 1px solid rgba(247,147,26,.3); }
+        .badge-w    { background: rgba(91,156,246,.12);  color: var(--blue);   border: 1px solid rgba(91,156,246,.25); }
+        .badge-cf   { background: rgba(61,220,132,.1);   color: var(--green);  border: 1px solid rgba(61,220,132,.2); }
+        .badge-nl   { background: rgba(74,90,110,.2);    color: var(--muted);  border: 1px solid var(--border-hi); }
+        .badge-none { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+
+        /* ── Ping colors ── */
+        .ping-good { color: var(--green); }
+        .ping-mid  { color: var(--yellow); }
+        .ping-bad  { color: var(--red); }
+
+        /* ── Footer ── */
+        footer {
+            margin-top: auto;
+            padding: 16px 32px;
+            border-top: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            font-size: 10px;
+            color: var(--muted);
+            letter-spacing: 0.06em;
+        }
+
+        /* ── HTMX loading indicator ── */
+        .htmx-indicator {
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+        .htmx-request .htmx-indicator,
+        .htmx-request.htmx-indicator {
+            opacity: 1;
+        }
+        .spinner {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border: 2px solid var(--border-hi);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+            vertical-align: middle;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* ── Fade-in on load ── */
+        #peers-wrap {
+            animation: fadein 0.4s ease;
+        }
+        @keyframes fadein { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+    </style>
+</head>
+<body>
+<div class="shell">
+
+    <header>
+        <!-- Bitcoin "₿" SVG logo -->
+        <svg class="btc-logo" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="50" cy="50" r="50" fill="#f7931a"/>
+            <text x="50" y="68" text-anchor="middle" font-size="58" font-family="Arial Black, sans-serif" font-weight="900" fill="white">₿</text>
+        </svg>
+        <div class="header-text">
+            <h1>Peer Monitor</h1>
+            <div class="subtitle">Bitcoin Core · Node Intelligence</div>
+        </div>
+        <div class="header-right">
+            <div class="pulse-dot"></div>
+            <span class="status-label">Live</span>
+            <span class="htmx-indicator" id="spinner"><span class="spinner"></span></span>
+        </div>
+    </header>
+
+    <div id="peers-wrap"
+         hx-get="/peers"
+         hx-trigger="load, every 15s"
+         hx-target="#peers-wrap"
+         hx-swap="innerHTML"
+         hx-indicator="#spinner">
+        <div id="meta-bar">
+            <span class="peer-count">Loading…</span>
+            <span class="last-update">—</span>
+        </div>
+        <div class="table-wrap">
+            <table><thead><tr>
+                <th>ID</th><th>Connected</th><th>Services</th><th>Client</th>
+                <th>Proto</th><th>Sent</th><th>Received</th><th>Ping</th>
+                <th>Inbound</th><th>Relay</th>
+            </tr></thead><tbody></tbody></table>
+        </div>
+    </div>
+
+    <footer>
+        <span>Refreshes every 15 seconds</span>
+        <span>⚠ Yellow rows = missing NODE_NETWORK &nbsp;·&nbsp; Ping: <span style="color:var(--green)">green</span> &lt;100ms · <span style="color:var(--yellow)">yellow</span> &lt;300ms · <span style="color:var(--red)">red</span> ≥300ms</span>
+    </footer>
+
+</div>
+</body>
+</html>
