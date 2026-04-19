@@ -12,6 +12,7 @@ Access at http://<your-node-ip>:8000
 import json
 import subprocess
 import requests
+from pathlib import Path
 from datetime import datetime
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
@@ -248,3 +249,17 @@ async def peers_fragment():
 async def index():
     with open("templates/index.html") as f:
         return f.read()
+
+
+@app.get("/tts/{filename}")
+async def tts_file(filename: str):
+    # Serve announcement clips from a local directory.
+    # Expected path: /home/mikeoc/bitcoin_peer_monitor/web/static/tts/<filename>
+    from fastapi.responses import FileResponse
+    base = Path("static/tts")
+    file_path = (base / filename).resolve()
+    if base.resolve() not in file_path.parents and file_path != base.resolve():
+        return HTMLResponse("invalid path", status_code=400)
+    if not file_path.exists():
+        return HTMLResponse("not found", status_code=404)
+    return FileResponse(str(file_path))
