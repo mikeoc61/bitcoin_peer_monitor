@@ -33,7 +33,7 @@ def get_peer_info():
     """Fetch peer info. Returns (peers, error_message)."""
     try:
         result = subprocess.run(
-            ["bitcoin-cli", "getpeerinfo"],
+            ["bitcoin-cli", "-datadir=/media/mikeoc/T72GB/Bitcoin", "getpeerinfo"],
             capture_output=True,
             text=True,
             timeout=5
