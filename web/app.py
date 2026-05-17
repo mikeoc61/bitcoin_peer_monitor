@@ -12,6 +12,7 @@ Access at http://<your-node-ip>:8000
 import json
 import subprocess
 import requests
+from ipaddress import ip_address, ip_network
 from pathlib import Path
 from datetime import datetime
 from fastapi import FastAPI
@@ -19,11 +20,64 @@ from fastapi.responses import HTMLResponse
 
 app = FastAPI()
 
+# --- Configuration ---------------------------------------------------------
+
+# Timeout (seconds) for the bitcoin-cli subprocess call.
+# Bump if you see "bitcoin-cli timed out" errors during heavy node activity
+# (validation, mempool processing, reorg recovery, etc.).
+BITCOIN_CLI_TIMEOUT = 15
+
+# Timeout (seconds) for outbound geolocation HTTP lookups.
+GEO_LOOKUP_TIMEOUT = 3
+
 # Service flags (bitmask values)
 NODE_NETWORK         = 1 << 0
 NODE_WITNESS         = 1 << 3
 NODE_COMPACT_FILTERS = 1 << 6
 NODE_NETWORK_LIMITED = 1 << 10
+
+# --- Cloud provider IP detection -------------------------------------------
+# ip-api.com's free tier has poor coverage for IPv6 cloud allocations
+# (returns "Unknown"). Pre-classify common cloud ranges locally before
+# hitting the API. Extend as needed.
+
+CLOUD_PREFIXES = [
+    # AWS
+    ("2600:1f00::/24",  "AWS",          "☁️"),
+    ("2406:da00::/24",  "AWS",          "☁️"),
+    ("2a05:d000::/24",  "AWS",          "☁️"),
+    # Google Cloud
+    ("2600:1900::/28",  "Google Cloud", "☁️"),
+    ("2001:4860::/32",  "Google",       "☁️"),
+    # Azure
+    ("2603:1000::/24",  "Azure",        "☁️"),
+    ("2a01:111::/32",   "Azure",        "☁️"),
+    # Cloudflare
+    ("2606:4700::/32",  "Cloudflare",   "☁️"),
+    ("2a06:98c0::/29",  "Cloudflare",   "☁️"),
+    # Hetzner
+    ("2a01:4f8::/29",   "Hetzner",      "🇩🇪"),
+    ("2a01:4f9::/29",   "Hetzner",      "🇩🇪"),
+    # OVH
+    ("2001:41d0::/32",  "OVH",          "🇫🇷"),
+    # DigitalOcean
+    ("2604:a880::/32",  "DigitalOcean", "☁️"),
+    ("2a03:b0c0::/32",  "DigitalOcean", "☁️"),
+    # Linode / Akamai
+    ("2600:3c00::/24",  "Linode",       "☁️"),
+    ("2400:8900::/32",  "Linode",       "☁️"),
+    # Vultr
+    ("2001:19f0::/29",  "Vultr",        "☁️"),
+    ("2a05:f480::/29",  "Vultr",        "☁️"),
+]
+
+# Pre-compile networks at module load for fast lookups.
+_CLOUD_NETWORKS = []
+for _prefix, _name, _flag in CLOUD_PREFIXES:
+    try:
+        _CLOUD_NETWORKS.append((ip_network(_prefix), _name, _flag))
+    except ValueError:
+        pass
 
 # Geolocation cache: ip -> {flag, city, country}
 _geo_cache = {}
@@ -36,7 +90,7 @@ def get_peer_info():
             ["bitcoin-cli", "-datadir=/media/mikeoc/T72GB/Bitcoin", "getpeerinfo"],
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=BITCOIN_CLI_TIMEOUT
         )
         if result.returncode != 0:
             stderr = result.stderr.strip()
@@ -46,34 +100,96 @@ def get_peer_info():
             return [], "No response from bitcoind — node may be starting up"
         return json.loads(result.stdout), None
     except subprocess.TimeoutExpired:
-        return [], "bitcoin-cli timed out — node may be busy or restarting"
+        return [], f"bitcoin-cli timed out after {BITCOIN_CLI_TIMEOUT}s — node may be busy"
     except json.JSONDecodeError:
         return [], "Could not parse response from bitcoind"
     except Exception as e:
         return [], f"Unexpected error: {e}"
 
 
-def lookup_geo(ip):
-    """Look up geolocation for an IP using ip-api.com (free, no key required).
-    Results are cached in memory for the lifetime of the process."""
-    # Strip port if present
-    clean_ip = ip.split(":")[0].strip("[]")
+def extract_ip(addr):
+    """Extract IP/hostname from a bitcoind 'addr' string.
 
-    # Return cached result if available
+    Handles:
+        IPv4 with port:   1.2.3.4:8333         -> 1.2.3.4
+        IPv6 with port:   [2001:db8::1]:8333   -> 2001:db8::1
+        Tor / I2P:        foo.onion:8333       -> foo.onion
+        Bare address:     2001:db8::1          -> 2001:db8::1
+    """
+    if not addr:
+        return ""
+    addr = addr.strip()
+    # IPv6 bracketed form
+    if addr.startswith("["):
+        end = addr.find("]")
+        if end != -1:
+            return addr[1:end]
+    # IPv4 / .onion / .i2p with a single trailing :port
+    if addr.count(":") == 1:
+        return addr.rsplit(":", 1)[0]
+    # Bare hostname or address (no port)
+    return addr
+
+
+def lookup_cloud(ip_str):
+    """Return cloud provider info if IP is in a known cloud range, else None."""
+    try:
+        ip = ip_address(ip_str)
+    except ValueError:
+        return None
+    for network, name, flag in _CLOUD_NETWORKS:
+        if ip.version == network.version and ip in network:
+            return {"flag": flag, "city": name, "country": "Cloud"}
+    return None
+
+
+def lookup_geo(addr):
+    """Look up geolocation for a bitcoind peer address.
+
+    Resolution order:
+        1. In-memory cache
+        2. Anonymity network suffixes (.onion / .i2p)
+        3. Private / loopback / link-local (via stdlib ipaddress)
+        4. Known cloud provider prefix table
+        5. ip-api.com HTTP lookup
+    Results are cached for the lifetime of the process.
+    """
+    clean_ip = extract_ip(addr)
+
     if clean_ip in _geo_cache:
         return _geo_cache[clean_ip]
 
-    # Skip private/local IPs
-    private_prefixes = ("10.", "172.", "192.168.", "127.", "::1", "fc", "fd")
-    if any(clean_ip.startswith(p) for p in private_prefixes):
-        result = {"flag": "🏠", "city": "Local", "country": ""}
+    # Anonymity networks
+    if clean_ip.endswith(".onion"):
+        result = {"flag": "🧅", "city": "Tor", "country": ""}
+        _geo_cache[clean_ip] = result
+        return result
+    if clean_ip.endswith(".i2p"):
+        result = {"flag": "🌐", "city": "I2P", "country": ""}
         _geo_cache[clean_ip] = result
         return result
 
+    # Private / loopback / link-local (RFC1918, ULA fc00::/7, fe80::/10, 127/8, ::1)
+    try:
+        ip_obj = ip_address(clean_ip)
+        if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
+            result = {"flag": "🏠", "city": "Local", "country": ""}
+            _geo_cache[clean_ip] = result
+            return result
+    except ValueError:
+        pass  # not a parseable IP — fall through to ip-api anyway
+
+    # Known cloud provider (handles AWS/GCP/Azure IPv6 etc. that ip-api can't resolve)
+    cloud = lookup_cloud(clean_ip)
+    if cloud:
+        _geo_cache[clean_ip] = cloud
+        return cloud
+
+    # Fall back to ip-api.com
     try:
         resp = requests.get(
             f"http://ip-api.com/json/{clean_ip}?fields=status,country,countryCode,city",
-            timeout=3
+            timeout=GEO_LOOKUP_TIMEOUT
         )
         data = resp.json()
         if data.get("status") == "success":
@@ -132,10 +248,6 @@ def format_ping(pingtime):
         return '<span class="ping-bad">N/A</span>'
 
 
-def truncate(s, n):
-    return s[:n] + "…" if len(s) > n else s
-
-
 def build_rows(peers):
     rows = []
     for peer in peers:
@@ -154,7 +266,12 @@ def build_rows(peers):
         sent_mb = peer.get("bytessent", 0) / 1_048_576
         recv_mb = peer.get("bytesrecv", 0) / 1_048_576
 
-        subver = truncate(peer.get("subver", "Unknown").strip("/"), 22)
+        # Full subver — no server-side truncation. CSS in templates/index.html
+        # handles overflow (text-overflow: ellipsis) and full text appears on
+        # hover via the title attribute below.
+        subver = peer.get("subver", "Unknown").strip("/")
+        subver_attr = subver.replace('"', '&quot;')
+
         row_class = "row-warn" if missing_network else ""
 
         # Geolocation
@@ -185,7 +302,7 @@ def build_rows(peers):
             <td class="td-id">{peer['id']}</td>
             <td class="td-dur">{duration}</td>
             <td class="td-svc">{badge_html}</td>
-            <td class="td-ver">{subver}</td>
+            <td class="td-ver" title="{subver_attr}">{subver}</td>
             <td class="td-proto">{peer.get('version', '?')}</td>
             <td class="td-num">{sent_mb:.2f} MB</td>
             <td class="td-num">{recv_mb:.2f} MB</td>
