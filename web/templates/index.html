@@ -301,6 +301,13 @@
         @keyframes spin { to { transform: rotate(360deg); } }
 
         #peers-wrap { animation: fadein 0.4s ease; }
+	/* Client column: expand on wide screens, ellipsize on narrow ones */
+	#peer-table .td-ver {
+    	    max-width: clamp(150px, 22vw, 600px);
+    	    overflow: hidden;
+    	    text-overflow: ellipsis;
+    	    white-space: nowrap;
+	 }	
         @keyframes fadein { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
     </style>
 </head>
