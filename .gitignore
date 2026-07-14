@@ -4,6 +4,10 @@
 __pycache__/
 *.py[cod]
 
+# Specific to this project
+reports/
+state.json
+
 # C extensions
 *.so
 
